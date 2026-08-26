@@ -1,0 +1,156 @@
+From: Peter Strand <peter@zarquon.se>
+Subject: [PATCH 2/2] soc: apple: sep: instrument boot, and probe the ROM for liveness
+
+On a j413 (M2 Air) with the sep node enabled, apple_sep binds cleanly — probe()
+completes, so the sepfw region resolved, both manifests parsed, the mailbox was
+acquired and MSG_BOOT_TZ0 was sent — but 25e408000.mbox-recv stays at zero
+interrupts forever. The SEP never acks. The stub driver cannot tell us why,
+because it logs nothing and drops every message it does not recognise.
+
+Two changes:
+
+1. Log every inbound message before dispatch, un-comment the endpoint
+   advertisement handler, and report each boot-handshake ack. Nothing is
+   silently discarded any more.
+
+2. Probe the boot ROM with GETRAND before attempting the boot handshake. This
+   is the exact message m1n1's sep_get_random() uses (EP 0xFF, type 16, reply
+   type 116), and EP_BOOT is that same 0xFF ROM endpoint. It discriminates the
+   two candidate explanations for the silence:
+
+     GETRAND replies  -> ROM is alive and listening; TZ0 is being refused or
+                         ignored for some other reason.
+     GETRAND silent   -> the ROM endpoint is gone, i.e. SEPOS was already
+                         booted by iBoot, and this driver's TZ0/IMG4 path
+                         cannot work on a machine booted this way.
+
+Diagnostic only — no functional change to the boot sequence beyond one extra
+message sent ahead of it.
+
+Apply against AsahiLinux/linux, branch `asahi`.
+---
+--- a/drivers/soc/apple/sep.rs
++++ b/drivers/soc/apple/sep.rs
+@@ -52,8 +52,15 @@
+ 
+ const MSG_TYPE_SHIFT: u32 = 16;
+ const MSG_TYPE_MASK: u64 = 0xFF;
+-//const MSG_PARAM_SHIFT: u32 = 24;
+-//const MSG_PARAM_MASK: u64 = 0xFF;
++const MSG_PARAM_SHIFT: u32 = 24;
++const MSG_PARAM_MASK: u64 = 0xFF;
++
++/* ROM liveness probe: the same GETRAND that m1n1's sep_get_random() uses
++ * against the boot ROM endpoint (which is EP_BOOT, 0xFF). A reply proves the
++ * ROM is alive and listening; silence means SEPOS is already up and the ROM
++ * endpoint is gone, so the TZ0/IMG4 boot path below can never work. */
++const MSG_GETRAND: u64 = 16;
++const MSG_GETRAND_REPLY: u64 = 116;
+ 
+ const MSG_EP_MASK: u64 = 0xFF;
+ const MSG_DATA_SHIFT: u32 = 32;
+@@ -196,13 +203,28 @@
+         )
+     }
+     fn start(&self) -> Result<()> {
+-        self.mbox.lock().as_ref().unwrap().send(
++        let guard = self.mbox.lock();
++        let mbox = guard.as_ref().unwrap();
++
++        dev_info!(self.dev, "start: probing boot ROM with GETRAND");
++        mbox.send(
++            Message {
++                msg0: EP_BOOT | (MSG_GETRAND << MSG_TYPE_SHIFT),
++                msg1: 0,
++            },
++            false,
++        )?;
++
++        dev_info!(self.dev, "start: sending BOOT_TZ0");
++        mbox.send(
+             Message {
+                 msg0: EP_BOOT | (MSG_BOOT_TZ0 << MSG_TYPE_SHIFT),
+                 msg1: 0,
+             },
+             false,
+-        )
++        )?;
++        dev_info!(self.dev, "start: both messages queued, awaiting reply");
++        Ok(())
+     }
+     fn load_fw_and_shmem(&self) -> Result<()> {
+         let fw_addr = unsafe {
+@@ -242,14 +264,26 @@
+     fn process_boot_msg(&self, msg: Message) {
+         let ty = (msg.msg0 >> MSG_TYPE_SHIFT) & MSG_TYPE_MASK;
+         match ty {
+-            MSG_BOOT_TZ0_ACK1 => {}
++            MSG_GETRAND_REPLY => {
++                dev_info!(
++                    self.dev,
++                    "boot ROM is ALIVE: GETRAND reply, 4 bytes = 0x{:08x}",
++                    (msg.msg0 >> MSG_DATA_SHIFT) as u32
++                );
++            }
++            MSG_BOOT_TZ0_ACK1 => {
++                dev_info!(self.dev, "BOOT_TZ0 ack1 (0x69)");
++            }
+             MSG_BOOT_TZ0_ACK2 => {
++                dev_info!(self.dev, "BOOT_TZ0 ack2 (0xD2), loading firmware");
+                 let res = self.load_fw_and_shmem();
+                 if let Err(e) = res {
+                     dev_err!(self.dev, "Unable to load firmware: {:?}", e);
+                 }
+             }
+-            MSG_BOOT_IMG4_ACK => {}
++            MSG_BOOT_IMG4_ACK => {
++                dev_info!(self.dev, "BOOT_IMG4 ack (0x6A), SEPOS should now come up");
++            }
+             _ => {
+                 dev_err!(self.dev, "Unknown boot message type: {}", ty);
+             }
+@@ -257,28 +291,38 @@
+     }
+     fn process_discover_msg(&self, msg: Message) {
+         let ty = (msg.msg0 >> MSG_TYPE_SHIFT) & MSG_TYPE_MASK;
+-        //let data = (msg.msg0 >> MSG_DATA_SHIFT) as u32;
+-        //let param = (msg.msg0 >> MSG_PARAM_SHIFT) & MSG_PARAM_MASK;
++        let data = (msg.msg0 >> MSG_DATA_SHIFT) as u32;
++        let param = (msg.msg0 >> MSG_PARAM_SHIFT) & MSG_PARAM_MASK;
+         match ty {
+             MSG_ADVERTISE_EP => {
+-                /*dev_info!(
++                dev_info!(
+                     self.dev,
+                     "Got endpoint {:?} at {}",
+                     core::str::from_utf8(&data.to_be_bytes()),
+                     param
+-                );*/
++                );
+             }
+             _ => {
+-                //dev_warn!(self.dev, "Unknown discovery message type: {}", ty);
++                dev_warn!(self.dev, "Unknown discovery message type: {}", ty);
+             }
+         }
+     }
+     fn process_message(&self, msg: Message) {
+         let ep = msg.msg0 & MSG_EP_MASK;
++        dev_info!(
++            self.dev,
++            "RX ep=0x{:02x} type=0x{:02x} param=0x{:02x} data=0x{:08x} (msg0=0x{:016x} msg1=0x{:016x})",
++            ep,
++            (msg.msg0 >> MSG_TYPE_SHIFT) & MSG_TYPE_MASK,
++            (msg.msg0 >> MSG_PARAM_SHIFT) & MSG_PARAM_MASK,
++            (msg.msg0 >> MSG_DATA_SHIFT) as u32,
++            msg.msg0,
++            msg.msg1
++        );
+         match ep {
+             EP_BOOT => self.process_boot_msg(msg),
+             EP_DISCOVER => self.process_discover_msg(msg),
+-            _ => {} // dev_warn!(self.dev, "Message from unknown endpoint: {}", ep),
++            _ => dev_warn!(self.dev, "Message from unknown endpoint: 0x{:02x}", ep),
+         }
+     }
+     fn remove(&self) {

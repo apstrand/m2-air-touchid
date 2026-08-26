@@ -1,0 +1,14 @@
+# kernel source tree + build artifacts (multi-GB)
+build/
+# flashed images, patched DTBs, boot.bin backups
+out/
+
+# out-of-tree kernel module build artifacts
+mod/*.ko
+mod/*.o
+mod/*.mod
+mod/*.mod.c
+mod/.*.cmd
+mod/.module-common.o
+mod/Module.symvers
+mod/modules.order

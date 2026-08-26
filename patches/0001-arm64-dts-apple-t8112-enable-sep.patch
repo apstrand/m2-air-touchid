@@ -1,0 +1,39 @@
+From: Peter Strand <peter@zarquon.se>
+Subject: [PATCH 1/2] arm64: dts: apple: t8112: add sep alias and enable the node
+
+The SEP node is declared but disabled, and there is no "sep" alias, so
+m1n1's dt_set_sep() returns early at
+
+    const char *path = fdt_get_alias(dt, "sep");
+    if (path == NULL) { ... return 0; }
+
+and never reserves the sepfw region or attaches the local-policy-manifest /
+iboot-manifest properties that the driver's probe() requires. dt_set_sep()
+also does not touch status, so that has to be flipped here.
+
+This is a "turn it on so we can look at it" patch, not something to merge:
+booting SEPOS on a machine whose driver is a stub has no user-visible benefit
+yet. scripts/build-dtb.sh applies the equivalent change with fdtput straight
+to the shipped DTB, which avoids a kernel rebuild.
+
+Apply against AsahiLinux/linux, branch `asahi`.
+---
+--- a/arch/arm64/boot/dts/apple/t8112.dtsi
++++ b/arch/arm64/boot/dts/apple/t8112.dtsi
+@@ -22,6 +22,7 @@
+ 
+ 	aliases {
+ 		gpu = &gpu;
++		sep = &sep;
+ 		#ifdef APPLE_USE_PMP
+ 		pmp = &pmp;
+ 		#endif
+@@ -1649,7 +1650,7 @@
+ 			mboxes = <&sep_mbox>;
+ 			mbox-names = "mbox";
+ 			iommus = <&sep_dart 0>;
+-			status = "disabled";
++			status = "okay";
+ 		};
+ 
+ 		sep_mbox: mbox@25e408000 {
