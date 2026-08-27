@@ -80,19 +80,46 @@ boots SEPOS proper.
       binds — but the SEP mailbox has **zero** recv interrupts, i.e. it never acked
       `MSG_BOOT_TZ0`. See `notes/step1-results.md`.
       → `scripts/build-dtb.sh`, `scripts/install-boot-bin.sh`, `scripts/check-sep.sh`
-- [ ] **Step 1b** — find out *why* it is silent. Leading hypothesis: iBoot already
-      booted SEPOS, so the boot-ROM endpoint the driver targets is gone.
-      Cheapest test is reading m1n1's boot console at the next reboot.
-- [ ] **Step 2** — un-gag endpoint discovery so we can see what SEPOS advertises
-      on this machine. → `patches/0002-soc-apple-sep-log-endpoints.patch`
-- [ ] **Step 3** — from that endpoint list, find the biometric/`stac` endpoint and
-      reverse the message format. This is the actual work, and it is open-ended.
-- [ ] **Step 4** — userspace: SEP match is yes/no in-enclave, so this is a
+- [x] **Step 1b / 2 / 3** — establish why the SEP is silent under Linux and what it
+      advertises under macOS. **Resolved 2026-08-26.** Under Linux the AP cannot start
+      the SEP at all: the ASC control page reads-as-zero and `CPU_CONTROL |= RUN` does
+      not stick — the control window is walled off from the AP (`notes/step2-results.md`,
+      `notes/step3-results.md`). So SEPOS never runs and nothing is ever advertised;
+      un-gagging `MSG_ADVERTISE_EP` in `sep.rs` is moot on a Linux boot.
+      On **macOS** (same machine, `notes/step4-results.md`) SEPOS boots and advertises
+      12 endpoints. The biometric endpoint is **`sep-endpoint,sbio`** (not `stac`), driven
+      by `AppleMesaSEPDriver → AppleBiometricServices`; calibration is `MesaCalBlobSource
+      = "FDR"`.
+- [ ] **Step 3b (the real blocker)** — get the SEP started in a state Linux can inherit.
+      `bputil -d` on both installs is **done** (`notes/step4-results.md`): the Asahi stub
+      (install 2, `love=22.7.74`) already boots at **maximum permissive security**
+      (`smb0 && smb1`, CTRR off, custom KC), matching our decoded `local-policy-manifest`
+      exactly. **So the blocker is not a settable LocalPolicy bit** — the boot-policy side
+      is already wide open. What differs is the *handoff*: macOS's signed kernel +
+      `AppleSEPManager` brings up/pairs SEPOS; the m1n1→Linux path leaves the SEP control
+      window walled off from the AP. This is firmware/handoff territory (upstream Asahi,
+      "SEP: WIP"), not a local knob. The m1n1-console `GETRAND` probe was tried
+      (2026-08-26) and showed nothing — but it is **moot**: Step 2's instrumented kernel
+      already sent `GETRAND` to the same ROM endpoint, got no reply, and saw the SEP never
+      drain its recv FIFO. No cheap local probe remains.
+- [ ] **Step 5 (reopens 3b — `notes/step5-plan.md`)** — the Step 2/3 "SEP-start is
+      a firmware wall" verdict is likely premature. Upstream `sep.rs` boots the SEP
+      *purely by mailbox* (never writes CPU_CONTROL), and Asahi ships SEP-endpoint
+      stub drivers on real hardware — the bootstrap works elsewhere. The
+      `CPU_CONTROL`/control-page findings are red herrings; the one real anomaly is
+      the SEPROM not draining the AP→SEP FIFO on *this* boot, i.e. a handoff/init
+      delta that is plausibly local. Decisive cheap test: send GETRAND to SEP EP
+      0xFF from the **m1n1 proxy/hypervisor** and read the I2A reply FIFO directly —
+      does the SEP mailbox answer *before* Linux? Then trace the handoff under
+      `m1n1 hv`. See `notes/step5-plan.md` for the full 5.1–5.6 plan.
+- [ ] **Step 6** — userspace: SEP match is yes/no in-enclave, so this is a
       libfprint/fprintd shim over a kernel-provided verify call, not an image-based
-      driver. Enrollment likely has to happen in macOS.
+      driver. Enrollment likely has to happen in macOS (calibration + templates are
+      SEP/FDR-owned — confirmed in `notes/step4-results.md`).
 
 Upstream context: Asahi's M2 feature table lists **SEP as WIP** and **Touch ID as TBA**.
-Nothing here contradicts that — Step 3 is where the multi-year part lives.
+Nothing here contradicts that — the blocker is Step 3b (starting the SEP from Linux),
+and Step 3/4 (reversing the `sbio` protocol) is where the multi-year part lives.
 
 ## Rollback / safety
 
