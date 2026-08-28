@@ -1,0 +1,79 @@
+From: Peter Strand <peter@zarquon.se>
+Subject: [PATCH 4/4] sep: dump SEP firmware provenance from the ADT (touchid step 5.1b)
+
+Follow-up to patch 0003 / step 5.1. That probe showed the SEP mailbox never
+answers at m1n1 time (asc_send=1, no reply at 1ms or 200ms) with the power
+domain on and the mailbox live -- i.e. the SEP core is powered but not running
+its ROM servicer on the m1n1 boot path. The one cheap bit that decides whether
+any local fix exists is whether iBoot started the SEP for THIS boot object.
+
+macOS on the same unit (step4) has /chosen sepfw-booted = 1. This prints, once,
+the same ADT provenance for the Asahi boot:
+  - /chosen sepfw-booted / sepfw-loaded / sepfw-load-at-boot
+  - the SEPFW [base,size] region from /chosen/memory-map (fw blob resident?)
+
+Decode:
+  sepfw-booted = 0  -> iBoot never started the SEP on the m1n1 path; the core is
+                       halted-not-started. No wake will help; only reproducing
+                       iBoot's SEP-start (upstream "SEP: WIP") would.
+  sepfw-booted = 1  -> iBoot booted then slept it; a wake / RTKit-hello sequence
+                       is missing (neither m1n1 nor sep.rs does it) -> possibly
+                       a local fix.
+
+Debug-only, read-only ADT access, prints once from sep_init().
+diff --git a/src/sep.c b/src/sep.c
+index c489004..33d9f65 100644
+--- a/src/sep.c
++++ b/src/sep.c
+@@ -2,6 +2,7 @@
+ 
+ #include <string.h>
+ 
++#include "adt.h"
+ #include "asc.h"
+ #include "sep.h"
+ #include "types.h"
+@@ -28,11 +29,43 @@ static asc_dev_t *sep_asc = NULL;
+ /* touchid step 5.1: emit the getrand handshake detail exactly once per boot. */
+ static bool sep_dbg_done = false;
+ 
++/* touchid step 5.1b: did iBoot load/boot the SEP firmware on THIS boot object?
++ * On macOS (step4) /chosen sepfw-booted = 1. If it is 0 on the m1n1 boot, iBoot
++ * left the SEP not-started (nothing to answer the mailbox); if 1, it was booted
++ * then slept (a wake/hello is missing). SEPFW=[base,size] in /chosen/memory-map
++ * says whether the fw blob is even resident in RAM. Prints once. */
++static void sep_dump_provenance(void)
++{
++    int chosen = adt_path_offset(adt, "/chosen");
++    if (chosen < 0) {
++        printf("SEP: [dbg] no /chosen node in ADT\n");
++        return;
++    }
++
++    static const char *const flags[] = {"sepfw-booted", "sepfw-loaded",
++                                         "sepfw-load-at-boot"};
++    for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
++        u32 v;
++        if (ADT_GETPROP(adt, chosen, flags[i], &v) < 0)
++            printf("SEP: [dbg] /chosen %s = <absent>\n", flags[i]);
++        else
++            printf("SEP: [dbg] /chosen %s = %u\n", flags[i], v);
++    }
++
++    int mm = adt_path_offset(adt, "/chosen/memory-map");
++    u64 sepfw[2];
++    if (mm >= 0 && ADT_GETPROP_ARRAY(adt, mm, "SEPFW", sepfw) >= 0)
++        printf("SEP: [dbg] SEPFW region base=0x%lx size=0x%lx\n", sepfw[0], sepfw[1]);
++    else
++        printf("SEP: [dbg] SEPFW region = <absent>\n");
++}
++
+ int sep_init(void)
+ {
+     if (!sep_asc) {
+         sep_asc = asc_init("/arm-io/sep");
+         printf("SEP: [dbg] asc_init(/arm-io/sep) = %p\n", sep_asc);
++        sep_dump_provenance();
+     }
+     if (!sep_asc)
+         return -1;

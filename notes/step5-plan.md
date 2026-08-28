@@ -1,5 +1,16 @@
 # Step 5 — reopening "the SEP cannot start from Linux"
 
+> **SUPERSEDED — read `notes/step5-results.md` for the outcome.** This is the
+> *plan* as written before running 5.1–5.5. Two of its premises turned out to be
+> **wrong**: (1) that the SEP-start "wall" was likely a local, testable anomaly —
+> 5.1 showed the SEP is uniformly silent at m1n1 *and* Linux time, re-confirming the
+> wall; and (2) that "Asahi ships SEP-endpoint stubs on real hardware, so the
+> bootstrap works elsewhere" (lines below) — 5.5 found the SEP node is `disabled` on
+> every Apple DT, **no** `sep-endpoint` driver ships, and upstream `sep.rs` is a stub
+> that assumes an already-awake SEP. The SEP boots from Linux on no Asahi machine; the
+> real gap is *waking / re-bootstrapping the slept SEP*, unsolved upstream. Keep this
+> file for the experiment design (5.1's method was sound and produced the answer).
+
 Written 2026-08-27. This revisits the Step 2/3 conclusion (`SEP-start is a
 firmware/handoff wall, upstream-only`) after checking it against the current
 upstream Asahi SEP boot model. **The conclusion looks premature.** The real
@@ -148,6 +159,38 @@ side (where the m1n1 checkout lives) as `patches/0003-m1n1-log-sep-getrand.patch
   via `proxyclient`. Use it to trace the AP↔SEP mailbox (`+0x8000`, A2I/I2A FIFOs) around
   the first `BOOT_TZ0` once 5.1 has localized m1n1-time vs. kernel-time.
 - Next action on reboot: apply 5.1 m1n1 instrumentation → rebuild boot.bin → read console.
+
+### 5.1 built and staged on Linux (2026-08-27, on the j413/Asahi target)
+The m1n1-side instrumentation is authored, compiled, and packaged into a flashable
+build. Only the sudo flash + reboot + console capture remain (user-run via `!`).
+
+- **Patch:** `patches/0003-m1n1-log-sep-getrand.patch` (applies cleanly to a
+  pristine `~/code/m1n1`). Instruments `sep_get_random()` to log, once per boot:
+  `asc_init()` result, `asc_cpu_running()` + `asc_can_recv()` (stale I2A FIFO?),
+  the `asc_send()` result, and the `asc_recv_timeout()` result + raw `msg0`.
+- **New finding while reading the source — the plan's "1000 ms" is wrong.**
+  `asc_recv_timeout()` takes **microseconds**, and `SEP_TIMEOUT` is `1000`, so
+  today's GETRAND probe waits only **1 ms** for the SEP. iBoot leaves the SEP as
+  *slept SEPOS* (`sepfw-booted=1`), which can answer slower than 1 ms. The patch
+  therefore retries once with a **200 ms** window on a 1 ms miss and logs it
+  separately — so we can tell "wedged" apart from merely "slower than 1 ms."
+  This alone is a candidate root cause that needs no handoff theory at all.
+- **Build path proven natively.** We are *on* the target (aarch64, `apple,j413`
+  / `t8112`), so m1n1 builds here with no cross setup. `build/m1n1.bin` builds
+  clean with `BUILDSTD=1 CHAINLOADING=1 RELEASE=1` (build-std needs the `rust-src`
+  package, present; CHAINLOADING is required because `update-m1n1` appends u-boot).
+- **Flash path:** `update-m1n1` honours an `M1N1=` env override, so the local
+  build slots into `boot.bin` in place of `/usr/lib/asahi-boot/m1n1.bin`.
+  `scripts/install-boot-bin.sh` now passes `M1N1` through; **`scripts/build-m1n1.sh`**
+  does the whole build→flash in one step (backs up boot.bin first).
+- **Next action (user, via `!`, needs root + reboot):**
+  `bash scripts/build-m1n1.sh` → reboot → capture the m1n1 console → read the
+  `SEP: [dbg] …` lines. Decode table is printed by the script and lives in 5.1 above.
+- **Console capture:** m1n1's prints are not in `dmesg`. Easiest path is the USB
+  CDC-ACM console gadget (VID:PID `1209:316d`, two ACM interfaces) — plug USB-C to a
+  second machine and `picocom -b 115200 /dev/ttyACM0 | tee m1n1-sep.log` (baud is
+  moot for CDC). Fallback: physical SBU-pin UART at 1500000 8N1. Full recipe (both
+  methods, plus how to stop m1n1 at the proxy) is in `scripts/build-m1n1.sh`.
 
 ### Where each remaining step runs
 - **Linux (Asahi):** 5.1 (m1n1 rebuild), 5.2 (hv trace — richer with a 2nd-machine

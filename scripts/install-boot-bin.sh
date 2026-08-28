@@ -25,7 +25,16 @@ cp "$TARGET" "$BACKUP"
 echo "==> backed up $TARGET -> $BACKUP"
 
 echo "==> rebuilding boot.bin with patched DTBs"
-sudo env DTBS="$DTB_DIR/*.dtb" update-m1n1 "$TARGET"
+# Optional M1N1 override: point update-m1n1 at a locally-built m1n1.bin instead
+# of the packaged /usr/lib/asahi-boot/m1n1.bin (e.g. the step-5.1 instrumented
+# build from scripts/build-m1n1.sh). update-m1n1 reads M1N1 from the environment.
+if [ -n "${M1N1:-}" ]; then
+    [ -f "$M1N1" ] || { echo "error: M1N1=$M1N1 not found" >&2; exit 1; }
+    echo "==> using custom m1n1: $M1N1"
+    sudo env M1N1="$M1N1" DTBS="$DTB_DIR/*.dtb" update-m1n1 "$TARGET"
+else
+    sudo env DTBS="$DTB_DIR/*.dtb" update-m1n1 "$TARGET"
+fi
 
 echo
 echo "done. reboot, then check:"

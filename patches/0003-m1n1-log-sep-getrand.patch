@@ -1,0 +1,88 @@
+From: Peter Strand <peter@zarquon.se>
+Subject: [PATCH 3/3] sep: log the m1n1-time GETRAND handshake (touchid step 5.1)
+
+Instrument m1n1's sep_get_random() to answer the decisive step-5.1 question:
+does the SEP mailbox answer at m1n1 time on this specific j413, before Linux is
+in the picture? sep_get_random() already pokes SEP ROM endpoint 0xff (GETRAND)
+to seed KASLR/RNG during kboot, so it is a ready-made liveness probe; today it
+just fails silently ("SEP: couldn't get enough random bytes...").
+
+This adds, once per boot:
+  - asc_init() result for /arm-io/sep (did the mailbox device attach at all)
+  - asc_cpu_running() + asc_can_recv() before the first send (is the SEP ASC
+    alive, and is there a stale reply already sitting in the I2A FIFO)
+  - the asc_send() result, and the asc_recv_timeout() result + raw msg0
+
+It also notes a real bug hiding in plain sight: SEP_TIMEOUT is 1000 and
+asc_recv_timeout() takes MICROseconds, so the current probe waits only 1 ms.
+A slept SEPOS (iBoot sets sepfw-booted=1, then the SEP is slept before OS
+handoff) may answer slower than that. So on a 1 ms miss we retry once with a
+200 ms window and log that separately, to tell "wedged" apart from "slow".
+
+Debug-only; behaviour on the success path is unchanged (a 1 ms answer skips the
+retry). No functional change to the seed derived from a working SEP.
+diff --git a/src/sep.c b/src/sep.c
+index 7a40fef..c489004 100644
+--- a/src/sep.c
++++ b/src/sep.c
+@@ -16,14 +16,24 @@
+ #define SEP_MSG_GETRAND   16
+ #define SEP_REPLY_GETRAND 116
+ 
++/* NB: asc_recv_timeout() takes MICROseconds, so this is a 1 ms window, not 1 s.
++ * (touchid step 5.1: a slept SEPOS may answer slower than 1 ms.) */
+ #define SEP_TIMEOUT 1000
++/* Long fallback window for the step-5.1 probe: distinguishes "wedged" from
++ * "just slower than 1 ms". 200 ms. */
++#define SEP_TIMEOUT_DBG 200000
+ 
+ static asc_dev_t *sep_asc = NULL;
+ 
++/* touchid step 5.1: emit the getrand handshake detail exactly once per boot. */
++static bool sep_dbg_done = false;
++
+ int sep_init(void)
+ {
+-    if (!sep_asc)
++    if (!sep_asc) {
+         sep_asc = asc_init("/arm-io/sep");
++        printf("SEP: [dbg] asc_init(/arm-io/sep) = %p\n", sep_asc);
++    }
+     if (!sep_asc)
+         return -1;
+     return 0;
+@@ -45,9 +55,32 @@ size_t sep_get_random(void *buffer, size_t len)
+         u32 rng;
+         size_t copy;
+ 
+-        if (!asc_send(sep_asc, &msg_getrand))
++        bool dbg = !sep_dbg_done;
++        if (dbg)
++            printf("SEP: [dbg] cpu_running=%d can_recv=%d (stale FIFO?)\n",
++                   asc_cpu_running(sep_asc), asc_can_recv(sep_asc));
++
++        bool sent = asc_send(sep_asc, &msg_getrand);
++        if (dbg)
++            printf("SEP: [dbg] getrand asc_send = %d\n", sent);
++        if (!sent) {
++            sep_dbg_done = true;
+             return done;
+-        if (!asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT))
++        }
++
++        bool got = asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT);
++        if (dbg) {
++            printf("SEP: [dbg] getrand recv(1ms) = %d msg0=%016lx\n", got,
++                   got ? reply.msg0 : 0UL);
++            if (!got) {
++                /* Give a slow/slept SEP a long window before calling it dead. */
++                got = asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT_DBG);
++                printf("SEP: [dbg] getrand recv(200ms retry) = %d msg0=%016lx\n",
++                       got, got ? reply.msg0 : 0UL);
++            }
++            sep_dbg_done = true;
++        }
++        if (!got)
+             return done;
+         if (FIELD_GET(SEP_MSG_CMD, reply.msg0) != SEP_REPLY_GETRAND) {
+             printf("SEP: unexpected getrand reply: %016lx\n", reply.msg0);

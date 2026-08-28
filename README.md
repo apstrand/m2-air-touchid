@@ -67,10 +67,14 @@ manifests. A later overlay (U-Boot, kernel) cannot synthesise those.
 There is no SKS, no `stac` endpoint, no biometric endpoint, no userspace interface.
 Booting the SEP gets us to the starting line, not to Touch ID.
 
-Note that m1n1 *already* talks to the SEP boot ROM today — `sep_get_random()` in
-`m1n1/src/sep.c` pokes endpoint 0xFF `GETRAND` for the KASLR/RNG seed — so the
-mailbox path itself is known-good on this hardware. The kernel driver is what
-boots SEPOS proper.
+Note that m1n1 *tries* to talk to the SEP boot ROM today — `sep_get_random()` in
+`m1n1/src/sep.c` pokes endpoint 0xFF `GETRAND` for the KASLR/RNG seed. **On this
+j413 that call fails silently at every boot** (measured in Step 5.1,
+`notes/step5-results.md`): the AP queues the message but the SEP never replies, so
+m1n1 falls back to the ADT rng seed. An earlier draft of this note called the
+mailbox path "known-good on this hardware" — that was an assumption and it is
+wrong; the SEP ROM does not answer on the m1n1 boot path. The kernel driver is
+what would boot SEPOS proper (and it can't either — same silence, see Step 1).
 
 ## Plan
 
@@ -102,24 +106,44 @@ boots SEPOS proper.
       (2026-08-26) and showed nothing — but it is **moot**: Step 2's instrumented kernel
       already sent `GETRAND` to the same ROM endpoint, got no reply, and saw the SEP never
       drain its recv FIFO. No cheap local probe remains.
-- [ ] **Step 5 (reopens 3b — `notes/step5-plan.md`)** — the Step 2/3 "SEP-start is
-      a firmware wall" verdict is likely premature. Upstream `sep.rs` boots the SEP
-      *purely by mailbox* (never writes CPU_CONTROL), and Asahi ships SEP-endpoint
-      stub drivers on real hardware — the bootstrap works elsewhere. The
-      `CPU_CONTROL`/control-page findings are red herrings; the one real anomaly is
-      the SEPROM not draining the AP→SEP FIFO on *this* boot, i.e. a handoff/init
-      delta that is plausibly local. Decisive cheap test: send GETRAND to SEP EP
-      0xFF from the **m1n1 proxy/hypervisor** and read the I2A reply FIFO directly —
-      does the SEP mailbox answer *before* Linux? Then trace the handoff under
-      `m1n1 hv`. See `notes/step5-plan.md` for the full 5.1–5.6 plan.
+- [x] **Step 5 (reopened 3b, then resolved it — `notes/step5-results.md`)** — 5.1/5.1b/5.5
+      re-tested the "SEP-start is a firmware wall" verdict and, this time, **explained**
+      it. Findings (all 2026-08-27):
+      - **5.1** — instrumented m1n1 (`patches/0003`, flashed via `scripts/build-m1n1.sh`,
+        console over USB CDC-ACM): the SEP does **not** answer GETRAND at m1n1 time either
+        (`asc_send=1`, no reply at 1 ms *or* 200 ms). Not a handoff regression — the SEP is
+        uniformly silent at m1n1 time and Linux time, reproducing Step 2's register read
+        (A2I HAS DATA, I2A empty, power domain on). `cpu_running=0` is a red herring (reads
+        the walled-off `+0x44`). The old README claim that GETRAND is "known-good on this
+        hardware" was wrong — it fails every boot and m1n1 falls back to the ADT rng seed.
+      - **5.1b** — ADT provenance (`patches/0004`): `SEPFW` region **present** (`base
+        0x802ae4000 size 0x5a0000` ≈ 5.6 MiB in RAM), `sepfw-load-at-boot = 1`,
+        `sepfw-booted`/`sepfw-loaded` **absent**. iBoot **loaded** the SEP firmware but did
+        **not boot** it — the *normal* Asahi hand-off (the OS is meant to boot the SEP).
+      - **5.5** — answered from source, no hardware: the SEP node is `disabled` on **every**
+        Apple DT (M1/M2/Pro/Max), **no `sep-endpoint` drivers exist**, and current upstream
+        `sep.rs` is a stub with no wake/start code that assumes an already-awake SEP. Per the
+        Asahi SEP docs, **the SEP is put to sleep before the OS kernel boots and the OS must
+        re-bootstrap it.** So the SEP boots from Linux on **no** Asahi machine — this is the
+        universal upstream gap, not a t8112/unit bug.
+      **Resolution:** the missing piece is *waking / re-bootstrapping the slept SEP* from
+      Linux before the `BOOT_TZ0`/`IMG4` mailbox handshake. `sep.rs` doesn't do it, the
+      node is disabled everywhere because of it, and it's unsolved on all Apple Silicon
+      ("SEP: WIP"). No cheap local experiment advances it further — see the "Bottom line"
+      in `notes/step5-results.md`.
 - [ ] **Step 6** — userspace: SEP match is yes/no in-enclave, so this is a
       libfprint/fprintd shim over a kernel-provided verify call, not an image-based
       driver. Enrollment likely has to happen in macOS (calibration + templates are
       SEP/FDR-owned — confirmed in `notes/step4-results.md`).
 
 Upstream context: Asahi's M2 feature table lists **SEP as WIP** and **Touch ID as TBA**.
-Nothing here contradicts that — the blocker is Step 3b (starting the SEP from Linux),
-and Step 3/4 (reversing the `sbio` protocol) is where the multi-year part lives.
+Nothing here contradicts that — and Step 5 pins down *why*: iBoot preloads the SEP
+firmware but the SEP is **put to sleep before the OS kernel boots** (Asahi SEP docs),
+and nothing on the Linux side wakes / re-bootstraps it. The SEP node is `disabled` on
+every Apple DT and upstream `sep.rs` is a stub that assumes an already-awake SEP, so
+the SEP boots from Linux on no Asahi machine yet. The blocker is that SEP wake/boot
+step (universal, upstream); reversing the `sbio` protocol (Steps 3/4/6) is the
+multi-year part beyond it.
 
 ## Rollback / safety
 

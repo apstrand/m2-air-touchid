@@ -93,6 +93,11 @@ names. That is the entire payoff of step 1. Everything after that is new code.
   mic data lines through the SEP; if SEP is unhappy, no mic). That was a stub
   driver toggling one thing, and it is the closest existing example of driving a
   non-boot SEP endpoint.
+  > **Correction (2026-08-27, Step 5.5):** not confirmed in the `linux-asahi 7.1.6`
+  > tree. There is **no** `sep-endpoint` driver in-tree and `apple,sep` has only one
+  > consumer (`sep.rs`), which discards advertised endpoints. If a mic-switch SEP
+  > driver exists it is out-of-tree / a different branch — do not treat it as shipped
+  > prior art. See `notes/step5-results.md` §5.5.
 - Matching happens inside SEPOS. The AP never sees fingerprint images, so the
   eventual userspace shape is a verify-yes/no call, not a libfprint image driver.
 - Enrolment almost certainly has to happen in macOS — we do not control the SEP
