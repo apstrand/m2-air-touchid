@@ -131,6 +131,21 @@ what would boot SEPOS proper (and it can't either — same silence, see Step 1).
       node is disabled everywhere because of it, and it's unsolved on all Apple Silicon
       ("SEP: WIP"). No cheap local experiment advances it further — see the "Bottom line"
       in `notes/step5-results.md`.
+- [ ] **Step 5.7 (dynamic RE — the half we never did)** — instrument a *live*
+      bring-up instead of more static reads. Two tools in `tracer/`
+      (`notes/step6-tracer-plan.md`):
+      - `sep_probe.py` — bare-metal over the m1n1 proxy: reads SEP AP-side state
+        + sends boot-ROM `GET_STATUS`, giving a live yes/no on "does the SEP ROM
+        answer." Also gates the **reopened local experiment**: a PMGR `ps_sep`
+        power-cycle (`--reset`, danger-gated). `ps_sep` is AP-writable and is
+        *not* the walled-off `CPU_CONTROL` at `+0x44` that steps 2/3 disproved —
+        so "the AP can't start the SEP" was only ever shown for the wrong reg.
+      - `trace_sep.py` — m1n1 hv tracer: logs the macOS AP↔SEP mailbox, decoded,
+        plus `CPU_CONTROL`/FIFO and **PMGR `ps_sep`** writes. Target question:
+        does a working bring-up pulse reset/power at `ps_sep` before `BOOT_TZ0`?
+        Caveat: iBoot boots the SEP before the hv guest, so vs macOS this
+        captures steady-state + re-pair, not the cold SEPROM boot.
+      → `scripts/run-sep-probe.sh`, `scripts/trace-sep-macos.sh`
 - [ ] **Step 6** — userspace: SEP match is yes/no in-enclave, so this is a
       libfprint/fprintd shim over a kernel-provided verify call, not an image-based
       driver. Enrollment likely has to happen in macOS (calibration + templates are

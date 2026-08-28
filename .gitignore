@@ -12,3 +12,4 @@ mod/.*.cmd
 mod/.module-common.o
 mod/Module.symvers
 mod/modules.order
+__pycache__/
