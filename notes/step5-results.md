@@ -1,6 +1,15 @@
 # Step 5.1 result — the SEP is silent at m1n1 time too (not a handoff regression)
 
-Instrumented m1n1 (`patches/0003-m1n1-log-sep-getrand.patch`) built + flashed via
+**Historical report, reassessed 2026-09-08:** preserve the observations below;
+use [the current plan](next-steps.md) for conclusions and experiments. Early
+GETRAND timeouts do not rule out an independent kernel initialization problem.
+Send success does not measure subsequent FIFO consumption, absent ADT flags do
+not prove a halted core, and disabled stock DT nodes do not prove that no
+development kernel has ever booted SEP. The quoted sleep/wake explanation and
+the purported driver quote below were not found in the current upstream SEP
+documentation and driver checked on 2026-09-08.
+
+Instrumented m1n1 (`patches/historical/0003-m1n1-log-sep-getrand-200ms.patch`) built + flashed via
 `scripts/build-m1n1.sh`, booted, m1n1 console captured over the USB CDC-ACM gadget.
 
 ## What the console showed

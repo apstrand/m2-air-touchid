@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
+# Historical August experiment; see notes/next-steps.md for the current plan.
+# This builds the archived 200 ms variant, NOT the September SEPDBG baseline,
+# and installs immediately. It is not the candidate-staging workflow.
 # Build a local m1n1 (with the step-5.1 SEP GETRAND instrumentation applied) and
 # flash it into /boot/m1n1/boot.bin together with the SEP-enabled DTBs.
 #
 # Why a local m1n1 at all: update-m1n1 normally bundles the *packaged* m1n1
-# (/usr/lib/asahi-boot/m1n1.bin). To get patches/0003-m1n1-log-sep-getrand.patch
+# (/usr/lib/asahi-boot/m1n1.bin). To get the historical GETRAND patch
 # into boot.bin we build m1n1 ourselves and hand update-m1n1 an M1N1= override
 # (see scripts/install-boot-bin.sh).
 #
 # boot.bin layout produced by update-m1n1:  m1n1.bin + DTBs + gzip(u-boot) + cfg
-# so m1n1 MUST be built with CHAINLOADING=1 to hand off to the appended u-boot,
-# and RELEASE=1 to match the packaged build. BUILDSTD=1 builds core/alloc from
+# CHAINLOADING=1 below preserves the old experiment's flags; it enables the
+# Rust disk chainloader, and is not required to boot appended U-Boot payloads.
+# RELEASE=1 disables framebuffer diagnostics. BUILDSTD=1 builds core/alloc from
 # rust-src (Arch rust ships no aarch64-unknown-none-softfloat std).
 #
 # BOOT-CRITICAL (it rewrites boot.bin). See "Rollback / safety" in ../README.md.
@@ -23,7 +27,7 @@ M1N1_SRC="${M1N1_SRC:-$HOME/code/m1n1}"
 # SEP instrumentation patches, applied in order. Each line: "patchfile<TAB>marker"
 # where <marker> is a string grep'd in src/sep.c to detect it's already applied.
 PATCHES=(
-    "0003-m1n1-log-sep-getrand.patch	SEP: \[dbg\] getrand"
+    "historical/0003-m1n1-log-sep-getrand-200ms.patch	SEP: \[dbg\] getrand"
     "0004-m1n1-dump-sep-provenance.patch	sep_dump_provenance"
 )
 

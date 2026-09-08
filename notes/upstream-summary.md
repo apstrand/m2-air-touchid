@@ -1,5 +1,9 @@
 # SEP / Touch ID on Apple M2 (t8112, j413) under Asahi — findings
 
+**Historical summary:** the conclusion that Linux cannot start SEP is not
+established by these measurements. See [the current plan](next-steps.md) for
+corrected interpretations and the next experiment before using this upstream.
+
 Investigation of how far the Secure Enclave (SEP) and Touch ID can be brought up on a
 MacBook Air (13", M2, 2022) — `apple,j413` / `apple,t8112` — dual-booting macOS 26.5.1
 (build 25F80) and Asahi (`linux-asahi 7.1.6`, m1n1 v1.5.2). Same physical machine used

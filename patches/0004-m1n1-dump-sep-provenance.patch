@@ -1,6 +1,11 @@
 From: Peter Strand <peter@zarquon.se>
 Subject: [PATCH 4/4] sep: dump SEP firmware provenance from the ADT (touchid step 5.1b)
 
+Historical patch: applies after historical/0003-m1n1-log-sep-getrand-200ms.patch,
+not the September replacement at 0003-m1n1-log-sep-getrand.patch. The original
+interpretations below are superseded by notes/next-steps.md; in particular,
+an absent ADT property does not establish SEP's execution state.
+
 Follow-up to patch 0003 / step 5.1. That probe showed the SEP mailbox never
 answers at m1n1 time (asc_send=1, no reply at 1ms or 200ms) with the power
 domain on and the mailbox live -- i.e. the SEP core is powered but not running

@@ -1,88 +1,148 @@
-From: Peter Strand <peter@zarquon.se>
-Subject: [PATCH 3/3] sep: log the m1n1-time GETRAND handshake (touchid step 5.1)
-
-Instrument m1n1's sep_get_random() to answer the decisive step-5.1 question:
-does the SEP mailbox answer at m1n1 time on this specific j413, before Linux is
-in the picture? sep_get_random() already pokes SEP ROM endpoint 0xff (GETRAND)
-to seed KASLR/RNG during kboot, so it is a ready-made liveness probe; today it
-just fails silently ("SEP: couldn't get enough random bytes...").
-
-This adds, once per boot:
-  - asc_init() result for /arm-io/sep (did the mailbox device attach at all)
-  - asc_cpu_running() + asc_can_recv() before the first send (is the SEP ASC
-    alive, and is there a stale reply already sitting in the I2A FIFO)
-  - the asc_send() result, and the asc_recv_timeout() result + raw msg0
-
-It also notes a real bug hiding in plain sight: SEP_TIMEOUT is 1000 and
-asc_recv_timeout() takes MICROseconds, so the current probe waits only 1 ms.
-A slept SEPOS (iBoot sets sepfw-booted=1, then the SEP is slept before OS
-handoff) may answer slower than that. So on a 1 ms miss we retry once with a
-200 ms window and log that separately, to tell "wedged" apart from "slow".
-
-Debug-only; behaviour on the success path is unchanged (a 1 ms answer skips the
-retry). No functional change to the seed derived from a working SEP.
+diff --git a/src/asc.c b/src/asc.c
+index fb4b95f..debff85 100644
+--- a/src/asc.c
++++ b/src/asc.c
+@@ -86,6 +86,14 @@ bool asc_can_recv(asc_dev_t *asc)
+     return !(read32(asc->base + ASC_MBOX_I2A_CONTROL) & ASC_MBOX_CONTROL_EMPTY);
+ }
+ 
++struct asc_mailbox_status asc_get_mailbox_status(asc_dev_t *asc)
++{
++    return (struct asc_mailbox_status){
++        .a2i = read32(asc->base + ASC_MBOX_A2I_CONTROL),
++        .i2a = read32(asc->base + ASC_MBOX_I2A_CONTROL),
++    };
++}
++
+ bool asc_recv(asc_dev_t *asc, struct asc_message *msg)
+ {
+     if (!asc_can_recv(asc))
+diff --git a/src/asc.h b/src/asc.h
+index 8a7ee3c..10f8fef 100644
+--- a/src/asc.h
++++ b/src/asc.h
+@@ -12,6 +12,11 @@ struct asc_message {
+ 
+ typedef struct asc_dev asc_dev_t;
+ 
++struct asc_mailbox_status {
++    u32 a2i;
++    u32 i2a;
++};
++
+ asc_dev_t *asc_init(const char *path);
+ void asc_free(asc_dev_t *asc);
+ 
+@@ -23,6 +28,7 @@ bool asc_cpu_running(asc_dev_t *asc);
+ 
+ bool asc_can_recv(asc_dev_t *asc);
+ bool asc_can_send(asc_dev_t *asc);
++struct asc_mailbox_status asc_get_mailbox_status(asc_dev_t *asc);
+ 
+ bool asc_recv(asc_dev_t *asc, struct asc_message *msg);
+ bool asc_recv_timeout(asc_dev_t *asc, struct asc_message *msg, u32 delay_usec);
 diff --git a/src/sep.c b/src/sep.c
-index 7a40fef..c489004 100644
+index 7a40fef..470abda 100644
 --- a/src/sep.c
 +++ b/src/sep.c
-@@ -16,14 +16,24 @@
+@@ -2,6 +2,8 @@
+ 
+ #include <string.h>
+ 
++#include "../build/build_tag.h"
++
+ #include "asc.h"
+ #include "sep.h"
+ #include "types.h"
+@@ -16,42 +18,75 @@
  #define SEP_MSG_GETRAND   16
  #define SEP_REPLY_GETRAND 116
  
-+/* NB: asc_recv_timeout() takes MICROseconds, so this is a 1 ms window, not 1 s.
-+ * (touchid step 5.1: a slept SEPOS may answer slower than 1 ms.) */
- #define SEP_TIMEOUT 1000
-+/* Long fallback window for the step-5.1 probe: distinguishes "wedged" from
-+ * "just slower than 1 ms". 200 ms. */
-+#define SEP_TIMEOUT_DBG 200000
+-#define SEP_TIMEOUT 1000
++#define SEP_TIMEOUT 1000 /* microseconds, unchanged from upstream */
  
  static asc_dev_t *sep_asc = NULL;
  
-+/* touchid step 5.1: emit the getrand handshake detail exactly once per boot. */
-+static bool sep_dbg_done = false;
-+
  int sep_init(void)
  {
 -    if (!sep_asc)
 +    if (!sep_asc) {
++        printf("SEPDBG: build=%s init begin\n", BUILD_TAG);
          sep_asc = asc_init("/arm-io/sep");
-+        printf("SEP: [dbg] asc_init(/arm-io/sep) = %p\n", sep_asc);
++        printf("SEPDBG: init=%s\n", sep_asc ? "ok" : "failed");
 +    }
      if (!sep_asc)
          return -1;
      return 0;
-@@ -45,9 +55,32 @@ size_t sep_get_random(void *buffer, size_t len)
+ }
+ 
++static void sep_log_status(const char *phase, struct asc_mailbox_status status)
++{
++    printf("SEPDBG: %s A2I=%08x I2A=%08x\n", phase, status.a2i, status.i2a);
++}
++
+ size_t sep_get_random(void *buffer, size_t len)
+ {
+     const struct asc_message msg_getrand = {.msg0 = FIELD_PREP(SEP_MSG_EP, SEP_EP_ROM) |
+                                                     FIELD_PREP(SEP_MSG_CMD, SEP_MSG_GETRAND)};
+     int ret;
+     size_t done = 0;
++    const size_t requested = len;
+ 
+     ret = sep_init();
+-    if (ret)
++    if (ret) {
++        printf("SEPDBG: getrand aborted: init failed, requested=%zu\n", requested);
+         return 0;
++    }
+ 
+     while (len) {
+         struct asc_message reply;
++        struct asc_mailbox_status before, sent, received;
++        bool send_ok, recv_ok = false;
          u32 rng;
          size_t copy;
  
 -        if (!asc_send(sep_asc, &msg_getrand))
-+        bool dbg = !sep_dbg_done;
-+        if (dbg)
-+            printf("SEP: [dbg] cpu_running=%d can_recv=%d (stale FIFO?)\n",
-+                   asc_cpu_running(sep_asc), asc_can_recv(sep_asc));
-+
-+        bool sent = asc_send(sep_asc, &msg_getrand);
-+        if (dbg)
-+            printf("SEP: [dbg] getrand asc_send = %d\n", sent);
-+        if (!sent) {
-+            sep_dbg_done = true;
-             return done;
+-            return done;
 -        if (!asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT))
+-            return done;
++        /* Sample control registers only; printing waits until the exchange ends. */
++        before = asc_get_mailbox_status(sep_asc);
++        send_ok = asc_send(sep_asc, &msg_getrand);
++        sent = asc_get_mailbox_status(sep_asc);
++        if (send_ok)
++            recv_ok = asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT);
++        received = asc_get_mailbox_status(sep_asc);
++
++        /* Report the first exchange and every failure, without printing RNG data. */
++        if (!done || !send_ok || !recv_ok ||
++            FIELD_GET(SEP_MSG_CMD, reply.msg0) != SEP_REPLY_GETRAND) {
++            printf("SEPDBG: getrand offset=%zu requested=%zu send=%s recv=%s timeout_us=%u\n",
++                   done, requested, send_ok ? "ok" : "failed",
++                   !send_ok ? "not-attempted" : (recv_ok ? "ok" : "timeout"), SEP_TIMEOUT);
++            sep_log_status("before-send", before);
++            sep_log_status("after-send", sent);
++            sep_log_status("after-recv", received);
++            if (recv_ok)
++                printf("SEPDBG: reply ep=0x%02lx type=0x%02lx\n",
++                       FIELD_GET(SEP_MSG_EP, reply.msg0), FIELD_GET(SEP_MSG_CMD, reply.msg0));
 +        }
 +
-+        bool got = asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT);
-+        if (dbg) {
-+            printf("SEP: [dbg] getrand recv(1ms) = %d msg0=%016lx\n", got,
-+                   got ? reply.msg0 : 0UL);
-+            if (!got) {
-+                /* Give a slow/slept SEP a long window before calling it dead. */
-+                got = asc_recv_timeout(sep_asc, &reply, SEP_TIMEOUT_DBG);
-+                printf("SEP: [dbg] getrand recv(200ms retry) = %d msg0=%016lx\n",
-+                       got, got ? reply.msg0 : 0UL);
-+            }
-+            sep_dbg_done = true;
-+        }
-+        if (!got)
-             return done;
++        if (!send_ok || !recv_ok)
++            break;
          if (FIELD_GET(SEP_MSG_CMD, reply.msg0) != SEP_REPLY_GETRAND) {
-             printf("SEP: unexpected getrand reply: %016lx\n", reply.msg0);
+-            printf("SEP: unexpected getrand reply: %016lx\n", reply.msg0);
+-            return done;
++            printf("SEPDBG: unexpected reply type\n");
++            break;
+         }
+ 
+         rng = FIELD_GET(SEP_MSG_DATA, reply.msg0);
+@@ -64,5 +99,6 @@ size_t sep_get_random(void *buffer, size_t len)
+         buffer += copy;
+     }
+ 
++    printf("SEPDBG: getrand complete=%zu/%zu\n", done, requested);
+     return done;
+ }

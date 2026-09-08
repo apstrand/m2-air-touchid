@@ -1,5 +1,13 @@
 # Step 6 (dynamic RE) — instrument a live SEP bring-up
 
+**Historical draft, reassessed 2026-09-08:** see [the current plan](next-steps.md).
+The tools below have not been validated on hardware. The default probe is not
+read-only: constructing `SEP` initializes DART, then the probe drains replies
+and sends GET_STATUS. Its stale-reply handling and PMGR lookup need correction
+against the pinned m1n1 API before use. A timeout is not a diagnosis of a halted
+core or evidence that a PMGR reset is needed. The macOS trace can only show
+activity after tracing starts; its initial SEP state must be recorded.
+
 Every prior step was *static*: registers read from a booted Linux, `ioreg`/
 `bputil` snapshots from a booted macOS, and reading `sep.rs`/`kboot.c`. We never
 watched a *working* AP↔SEP bring-up as it happened. This step adds that

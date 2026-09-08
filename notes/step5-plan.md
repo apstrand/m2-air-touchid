@@ -1,15 +1,13 @@
 # Step 5 — reopening "the SEP cannot start from Linux"
 
-> **SUPERSEDED — read `notes/step5-results.md` for the outcome.** This is the
-> *plan* as written before running 5.1–5.5. Two of its premises turned out to be
-> **wrong**: (1) that the SEP-start "wall" was likely a local, testable anomaly —
-> 5.1 showed the SEP is uniformly silent at m1n1 *and* Linux time, re-confirming the
-> wall; and (2) that "Asahi ships SEP-endpoint stubs on real hardware, so the
-> bootstrap works elsewhere" (lines below) — 5.5 found the SEP node is `disabled` on
-> every Apple DT, **no** `sep-endpoint` driver ships, and upstream `sep.rs` is a stub
-> that assumes an already-awake SEP. The SEP boots from Linux on no Asahi machine; the
-> real gap is *waking / re-bootstrapping the slept SEP*, unsolved upstream. Keep this
-> file for the experiment design (5.1's method was sound and produced the answer).
+**Superseded 2026-09-08:** see [the current plan and Linux handoff](next-steps.md).
+[Step 5 results](step5-results.md) record the August GETRAND and ADT experiments;
+those observations remain part of the investigation. They do not establish a
+universal inability to boot SEP from Linux or identify a missing reset sequence.
+The September replacement for patch 0003 retains the upstream 1000-microsecond
+timeout and is not yet compiled or boot-tested. The August 200 ms variant is
+preserved under `patches/historical/`; the existing build-and-install wrapper
+reproduces that older experiment. See the current plan before using either.
 
 Written 2026-08-27. This revisits the Step 2/3 conclusion (`SEP-start is a
 firmware/handoff wall, upstream-only`) after checking it against the current
