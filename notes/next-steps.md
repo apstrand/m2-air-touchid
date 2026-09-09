@@ -55,8 +55,8 @@ The second USB-C host recorded in the earlier notes is available for tracing.
    Preserve the existing timeout and RNG behavior. Produce identified,
    checksummed m1n1 binaries and a separately staged candidate `boot.bin`.
    Verify the candidate contains the intended m1n1 binary and patched DTBs
-   before installation. **In progress: draft patch saved; compilation and
-   build/package wrapper replacements remain.** The old build wrapper exists
+   before installation. **Build and candidate staging are complete; hardware
+   installation and capture remain pending.** The old build wrapper exists
    but applies the August variant and installs immediately (see below).
 2. **Repeat the early baseline with attributable evidence.** The August run
    already reported m1n1-time silence. Record the new `SEPDBG` console output,
@@ -104,6 +104,8 @@ Two versions of the diagnostic now coexist intentionally:
 | `patches/historical/0003-m1n1-log-sep-getrand-200ms.patch` | Exact August patch preserved for the reported 1 ms + 200 ms experiment. |
 | `patches/0004-m1n1-dump-sep-provenance.patch` | ADT diagnostics layered on the historical patch; does not apply to the September baseline. |
 | `scripts/build-m1n1.sh` | Historical build-and-install wrapper, pointed at the archived variant so its markers and patch 0004 remain consistent. |
+| `scripts/build-m1n1-baseline.sh` | Revision-checked September build; records hashes and never installs. |
+| `scripts/stage-boot-candidate.sh` | Assembles and verifies a candidate under `out/`; never writes `/boot` or `/run`. |
 | `tracer/sep_probe.py`, `tracer/trace_sep.py` | August proxy/HV drafts, retained for repair and validation before hardware use. |
 
 `patches/0003-m1n1-log-sep-getrand.patch` targets m1n1 v1.5.2, commit
@@ -203,10 +205,17 @@ Before a hardware test, finish the remaining Step 1 work:
 - Exercise initialization failure, send failure, receive timeout, unexpected
   reply, partial completion, and success in a focused host-side harness. Check
   that no uninitialized reply is decoded or random payload printed.
-- Add a repeatable build wrapper that verifies the source revision, preserves
-  existing changes, and records patch/binary hashes and the build tag. Replace
-  or supplement the historical wrapper; it is not the baseline build command.
-- Add candidate packaging with the patched DTBs and the distro's U-Boot.
+- Completed 2026-09-08/09: the repeatable build wrapper was exercised against
+  the pinned checkout and produced `out/m1n1-baseline/v1.5.2-sepdbg-1/`.
+  `m1n1.bin` SHA-256 is
+  `84f2f2a18ec52006983153a0614cf0e682cfbac73695254175123e5109c9a2a0`.
+  The build emitted only expected GNU ld `.ARM.attributes` warnings.
+- Completed 2026-09-09: candidate packaging was exercised with the staged
+  patched DTBs and `/usr/lib/asahi-boot/u-boot-nodtb.bin`. It verified the
+  m1n1 and every DTB prefix (110 files) without writing `/boot` or `/run`.
+  Candidate SHA-256 is recorded in `out/boot-candidate.bin.manifest`.
+- Hardware boot and console capture remain pending; the candidate has not
+  been installed.
   `scripts/build-dtb.sh` prepares DTBs on Linux, but neither it nor
   `scripts/install-boot-bin.sh` compiles m1n1.
 - Upstream `update-m1n1` accepts `M1N1=/path/to/m1n1.bin` and an explicit target

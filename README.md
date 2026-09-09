@@ -4,9 +4,9 @@ Working notes + tooling for bringing up the Secure Enclave Processor (SEP) far
 enough to reach the Touch ID sensor on a MacBook Air (13-inch, M2, 2022)
 (`apple,j413` / `apple,t8112`) running Omarchy 4.0.1rc1, `linux-asahi 7.1.6`.
 
-Status (2026-09-08): **Linux driver binds after DT fixes, but SEP has not replied.**
-The cause is unresolved. August notes record early-boot timeouts; a September
-diagnostic revision still needs validation. See [the current plan and Linux
+Status (2026-09-09): **Linux driver binds after DT fixes, but SEP has not replied.**
+The September diagnostic baseline now compiles and has a verified, unstaged boot
+candidate; hardware capture is still pending. See [the current plan and Linux
 handoff](notes/next-steps.md).
 
 ## Original stock configuration (before Step 1)
@@ -83,10 +83,9 @@ The current plan and Linux resume commands are in
 - [x] Enable the DT node and provide m1n1's SEP fixups; Linux driver binds.
 - [x] Record Linux mailbox silence and collect the macOS `sbio` reference.
 - [x] Preserve the August m1n1 GETRAND/ADT reports and draft proxy/HV tools.
-- [ ] Finish m1n1 diagnostics and build/package tooling. Draft patch
-      `patches/0003-m1n1-log-sep-getrand.patch` is saved against v1.5.2, but
-      compilation and hardware testing remain. The source checkout in `build/`
-      is ignored by git; recreate it on Linux.
+- [x] Finish m1n1 diagnostic compilation and safe candidate packaging. The
+      revision-pinned output and provenance are under `out/m1n1-baseline/` and
+      `out/boot-candidate.bin.manifest`; nothing has been installed.
 - [ ] Validate the proxy/HV tools against the pinned m1n1 API before use.
 - [ ] Capture an identified early baseline and trace the first Linux handshake.
 - [ ] Obtain repeatable Linux SEP boot acknowledgments and endpoint discovery.
